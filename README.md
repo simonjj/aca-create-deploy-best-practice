@@ -51,6 +51,15 @@ az group create -n $RG -l $LOCATION
 ./scripts/deploy-infra.sh
 ```
 
+**PowerShell equivalent:**
+
+```powershell
+$env:RG = 'rg-aca-demo'; $env:LOCATION = 'eastus2'; $env:APP = 'api'
+./scripts/deploy-infra.ps1
+./scripts/deploy-app.ps1
+./scripts/deploy-infra.ps1   # re-run; image is preserved
+```
+
 Check the running revision still points at your real image, not hello-world:
 
 ```bash
@@ -76,8 +85,10 @@ az containerapp show -g $RG -n $APP \
 │       ├── Dockerfile
 │       └── app.py                 # tiny Flask app exposing /health and /
 ├── scripts/
-│   ├── deploy-infra.sh            # resolves current image, runs Bicep
-│   └── deploy-app.sh              # builds, pushes to ACR, updates revision
+│   ├── deploy-infra.sh            # bash: resolves current image, runs Bicep
+│   ├── deploy-infra.ps1           # PowerShell equivalent
+│   ├── deploy-app.sh              # bash: builds, pushes to ACR, updates revision
+│   └── deploy-app.ps1             # PowerShell equivalent
 └── .github/
     └── workflows/
         ├── infra-deploy.yml       # runs on changes to infra/**
@@ -126,7 +137,7 @@ az deployment group create -g "$RG" \
 
 ## Bootstrap variants
 
-If you can't put a shell script in front of `az deployment group create` (e.g. consumers run `az deployment sub create` against your template directly), embed the image lookup as a `Microsoft.Resources/deploymentScripts` resource inside Bicep. See `infra/modules/containerapp.bicep` comments for the pattern — left as an off-by-default opt-in.
+If you can't put a shell script in front of `az deployment group create` (e.g. consumers run plain `az deployment group create` against your template directly), use the **bicep-only variant** in `infra/variants/bicep-only/` — it embeds the image lookup inside a `Microsoft.Resources/deploymentScripts` resource so a single Bicep deployment does the whole thing. See [`infra/variants/bicep-only/README.md`](infra/variants/bicep-only/README.md) for trade-offs.
 
 ---
 
