@@ -67,13 +67,70 @@ az deployment group what-if `
     --parameters appName=$AppName image=$image
 if ($LASTEXITCODE -ne 0) { throw "what-if failed" }
 
-Write-Host "Deploying ..."
-az deployment group create `
-    --resource-group $ResourceGroup `
-    --template-file infra/main.bicep `
-    --parameters $ParamFile `
-    --parameters appName=$AppName image=$image `
-    --output table
-if ($LASTEXITCODE -ne 0) { throw "deployment failed" }
+# Use --no-wait + manual polling so a stuck ARM call can be bounded by a real
+# wall-clock timeout and retried, instead of `az` hanging indefinitely.
+$deployTimeoutSeconds = if ($env:DEPLOY_TIMEOUT_SECONDS) { [int]$env:DEPLOY_TIMEOUT_SECONDS } else { 1500 }
+$retries = if ($env:RETRIES) { [int]$env:RETRIES } else { 2 }
+
+function Invoke-Deployment {
+    param([int]$Attempt)
+
+    $name = "aca-infra-$Attempt-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
+    Write-Host "Deploy attempt $Attempt of $retries (deployment name: $name) ..."
+
+    az deployment group create `
+        --name $name `
+        --resource-group $ResourceGroup `
+        --template-file infra/main.bicep `
+        --parameters $ParamFile `
+        --parameters appName=$AppName image=$image `
+        --no-wait `
+        --output none
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Failed to start deployment (rc=$LASTEXITCODE)"
+        return 1
+    }
+
+    $start = Get-Date
+    while ($true) {
+        $state = az deployment group show -g $ResourceGroup -n $name `
+                    --query "properties.provisioningState" -o tsv 2>$null
+        if ([string]::IsNullOrWhiteSpace($state)) { $state = 'Unknown' }
+
+        switch ($state) {
+            'Succeeded' {
+                Write-Host "Deployment succeeded."
+                return 0
+            }
+            { $_ -in 'Failed','Canceled' } {
+                Write-Warning "Deployment $state. Error details:"
+                az deployment group show -g $ResourceGroup -n $name `
+                    --query "properties.error" -o json
+                return 1
+            }
+        }
+
+        $elapsed = ((Get-Date) - $start).TotalSeconds
+        if ($elapsed -gt $deployTimeoutSeconds) {
+            Write-Warning "Deployment exceeded $deployTimeoutSeconds s wall-clock timeout; cancelling ..."
+            az deployment group cancel -g $ResourceGroup -n $name 2>$null | Out-Null
+            return 124
+        }
+        Write-Host "." -NoNewline
+        Start-Sleep -Seconds 15
+    }
+}
+
+$attempt = 1
+while ($true) {
+    $rc = Invoke-Deployment -Attempt $attempt
+    if ($rc -eq 0) { break }
+    if ($attempt -ge $retries) {
+        throw "Deployment failed after $attempt attempts."
+    }
+    $attempt++
+    Write-Host "Retrying in 30s ..."
+    Start-Sleep -Seconds 30
+}
 
 Write-Host "Done." -ForegroundColor Green

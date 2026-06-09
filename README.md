@@ -135,6 +135,17 @@ az deployment group create -g "$RG" \
 
 ---
 
+## Known issues
+
+- **`az deployment group create` occasionally hangs (one observed case in E2E testing)** during a redeploy that should otherwise be a fast no-op. The ARM call appears to never return; cancelling and re-running succeeds. The infra scripts (`deploy-infra.sh` / `deploy-infra.ps1`) work around this by:
+  - Issuing the deployment with `--no-wait` and polling `provisioningState` directly.
+  - Enforcing a wall-clock timeout (`DEPLOY_TIMEOUT_SECONDS`, default 1500s).
+  - Cancelling and retrying on timeout, up to `RETRIES` (default 2).
+
+  Override either via env var, e.g. `DEPLOY_TIMEOUT_SECONDS=900 RETRIES=3 ./scripts/deploy-infra.sh`.
+
+- **`az deployment-scripts show … --query "properties.outputs"` returns null** for the bicep-only variant — the resolved image is exposed at the top-level `outputs` field instead. This is a CLI display quirk; ARM/Bicep correctly consumes `script.properties.outputs.image` inside the template.
+
 ## Bootstrap variants
 
 If you can't put a shell script in front of `az deployment group create` (e.g. consumers run plain `az deployment group create` against your template directly), use the **bicep-only variant** in `infra/variants/bicep-only/` — it embeds the image lookup inside a `Microsoft.Resources/deploymentScripts` resource so a single Bicep deployment does the whole thing. See [`infra/variants/bicep-only/README.md`](infra/variants/bicep-only/README.md) for trade-offs.
